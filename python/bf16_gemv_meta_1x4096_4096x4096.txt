@@ -1,8 +1,8 @@
-seed=20260212
 A_shape=1x4096
 B_shape=4096x4096
 C_shape=1x4096
+pattern=A/B +1 ramp from 0
+wrap=65536
 layout=row-major flatten before packing
 pack=uint32_word: low16=A[i], high16=A[i+1]
 hex_format=one_uint32_per_line
-input_uniform_range=[-1.0, 1.0)
