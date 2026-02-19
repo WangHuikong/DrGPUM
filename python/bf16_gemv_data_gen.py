@@ -11,8 +11,8 @@ Default shape is:
 Data generation rule:
   - A is filled with BF16 value 1.0.
   - B starts from 0 and increments by 1.
-  - When value exceeds wrap_value, it wraps to 0.
-  - Default wrap_value is 65535 (16-bit width wrap).
+  - When B exceeds wrap_value, it wraps to 0 and continues.
+  - Default wrap_value is 65504 (FP16 max finite value).
 
 Hex output rule:
   - Pack 2 BF16 values into one 32-bit word per line.
@@ -124,8 +124,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--wrap-value",
         type=int,
-        default=65535,
-        help="Sequence wraps after this value (default: 65535 for 16-bit width wrap)",
+        default=65504,
+        help="B wraps after this value (default: FP16 max finite 65504)",
     )
     parser.add_argument(
         "--output-dir",
@@ -170,7 +170,7 @@ def main() -> None:
     c_path = out_dir / args.c_file
 
     print(f"[info] generating A({args.m}, {args.k}), B({args.k}, {args.n})")
-    print(f"[info] wrap_value={args.wrap_value}, endianness={args.endianness}")
+    print(f"[info] B wrap_value={args.wrap_value}, endianness={args.endianness}")
     print(f"[info] output dir: {out_dir.resolve()}")
 
     # A is constant BF16 1.0 for all elements.
