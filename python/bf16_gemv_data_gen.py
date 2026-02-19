@@ -11,10 +11,11 @@ Default shape is:
 Data generation rule:
   - A and B start from 0 and increment by 1.
   - When value exceeds wrap_value, it wraps to 0.
-  - Default wrap_value is 65504 (max finite FP16 value).
+  - Default wrap_value is 65535 (16-bit width wrap).
 
 Hex output rule:
   - Pack 2 BF16 values into one 32-bit word per line.
+  - Default packing is "big": first BF16 in high 16 bits.
   - Output one 8-hex-digit word per line (uppercase).
 """
 
@@ -47,9 +48,11 @@ def pack_two_bf16_to_u32(bits: np.ndarray, endianness: str) -> np.ndarray:
         bits = np.pad(bits, (0, 1), mode="constant")
 
     pairs = bits.reshape(-1, 2).astype(np.uint32)
-    if endianness == "little":
-        return pairs[:, 0] | (pairs[:, 1] << np.uint32(16))
-    return (pairs[:, 0] << np.uint32(16)) | pairs[:, 1]
+    if endianness == "big":
+        # Keep textual/visual order intuitive:
+        # [v0, v1] -> 0xVVVVWWWW (v0 in high 16 bits).
+        return (pairs[:, 0] << np.uint32(16)) | pairs[:, 1]
+    return pairs[:, 0] | (pairs[:, 1] << np.uint32(16))
 
 
 def write_bf16_hex_file(bits: np.ndarray, out_path: Path, endianness: str, with_0x: bool) -> None:
@@ -120,8 +123,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--wrap-value",
         type=int,
-        default=65504,
-        help="Sequence wraps after this value (default: FP16 max finite 65504)",
+        default=65535,
+        help="Sequence wraps after this value (default: 65535 for 16-bit width wrap)",
     )
     parser.add_argument(
         "--output-dir",
@@ -135,8 +138,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--endianness",
         choices=["little", "big"],
-        default="little",
-        help="Packing order for two BF16 words into one uint32",
+        default="big",
+        help="Packing order for two BF16 words into one uint32 (default: first value in high 16 bits)",
     )
     parser.add_argument(
         "--with-0x",
