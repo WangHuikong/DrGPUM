@@ -10,8 +10,10 @@ Default shape is:
 
 Data generation rule:
   - A is filled with BF16 value 1.0.
-  - B is filled by repeating integers in [b_min, b_max].
-  - Default B integer cycle is [0, 1, ..., 10].
+  - B can be generated in two modes:
+    1) range: repeat integers in [b_min, b_max]
+    2) ones:  all B values are BF16 1.0
+  - Default B mode is range with cycle [0, 1, ..., 10].
 
 Hex output rule:
   - Pack 2 BF16 values into one 32-bit word per line.
@@ -63,17 +65,8 @@ def write_bf16_hex_file(bits: np.ndarray, out_path: Path, endianness: str, with_
     np.savetxt(out_path, packed, fmt=fmt)
 
 
-def build_b_cycle(
-    b_min: int,
-    b_max: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Build one B cycle from integer source b_min..b_max.
-
-    Returns:
-      - cycle_bits: BF16 uint16 bit-patterns
-      - cycle_f32:  float32 values decoded from cycle_bits
-    """
+def build_b_cycle_range(b_min: int, b_max: int) -> tuple[np.ndarray, np.ndarray]:
+    """Build one B cycle from integer source b_min..b_max."""
     src = np.arange(b_min, b_max + 1, dtype=np.float32)
     cycle_bits = float32_to_bf16_bits(src)
     cycle_f32 = bf16_bits_to_float32(cycle_bits)
@@ -81,6 +74,20 @@ def build_b_cycle(
     if cycle_bits.size == 0:
         raise ValueError("B cycle is empty; check b_min/b_max")
     return cycle_bits.astype(np.uint16), cycle_f32.astype(np.float32)
+
+
+def build_b_cycle_ones() -> tuple[np.ndarray, np.ndarray]:
+    """Build B cycle where every element is BF16 1.0."""
+    cycle_bits = np.array([np.uint16(0x3F80)], dtype=np.uint16)
+    cycle_f32 = bf16_bits_to_float32(cycle_bits)
+    return cycle_bits, cycle_f32.astype(np.float32)
+
+
+def build_b_cycle(mode: str, b_min: int, b_max: int) -> tuple[np.ndarray, np.ndarray]:
+    """Dispatch B cycle builder by mode."""
+    if mode == "ones":
+        return build_b_cycle_ones()
+    return build_b_cycle_range(b_min=b_min, b_max=b_max)
 
 
 def generate_b_and_compute_c(
@@ -131,6 +138,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--m", type=int, default=1, help="A rows")
     parser.add_argument("--k", type=int, default=4096, help="A cols / B rows")
     parser.add_argument("--n", type=int, default=4096, help="B cols / C cols")
+    parser.add_argument(
+        "--b-mode",
+        choices=["range", "ones"],
+        default="range",
+        help="B generation mode: range repeats integers [b_min,b_max], ones uses constant 1.0",
+    )
     parser.add_argument("--b-min", type=int, default=0, help="B cycle integer minimum")
     parser.add_argument("--b-max", type=int, default=10, help="B cycle integer maximum")
     parser.add_argument(
@@ -167,7 +180,7 @@ def main() -> None:
 
     if args.m <= 0 or args.k <= 0 or args.n <= 0:
         raise ValueError("m, k, n must be positive integers")
-    if args.b_min > args.b_max:
+    if args.b_mode == "range" and args.b_min > args.b_max:
         raise ValueError("b_min must be <= b_max")
 
     out_dir = args.output_dir
@@ -176,7 +189,10 @@ def main() -> None:
     c_path = out_dir / args.c_file
 
     print(f"[info] generating A({args.m}, {args.k}), B({args.k}, {args.n})")
-    print(f"[info] B integer cycle=[{args.b_min}..{args.b_max}], endianness={args.endianness}")
+    if args.b_mode == "ones":
+        print(f"[info] B mode=ones (all values are 1.0), endianness={args.endianness}")
+    else:
+        print(f"[info] B mode=range, integer cycle=[{args.b_min}..{args.b_max}], endianness={args.endianness}")
     print(f"[info] output dir: {out_dir.resolve()}")
 
     # A is constant BF16 1.0 for all elements.
@@ -185,10 +201,7 @@ def main() -> None:
     write_bf16_hex_file(a_bits.reshape(-1), a_path, args.endianness, args.with_0x)
     print(f"[info] wrote A hex -> {a_path}")
 
-    b_cycle_bits, b_cycle_f32 = build_b_cycle(
-        b_min=args.b_min,
-        b_max=args.b_max,
-    )
+    b_cycle_bits, b_cycle_f32 = build_b_cycle(mode=args.b_mode, b_min=args.b_min, b_max=args.b_max)
     print(f"[info] B cycle length={b_cycle_bits.size}")
 
     # Stream B generation and C accumulation in float32.
