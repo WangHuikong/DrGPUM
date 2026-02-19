@@ -10,10 +10,8 @@ Default shape is:
 
 Data generation rule:
   - A is filled with BF16 value 1.0.
-  - B starts from 0 and increments by 1 in source integers.
-  - By default, adjacent duplicate BF16 values are removed from the B cycle.
-  - When B exceeds wrap_value, it wraps to 0 and continues.
-  - Default wrap_value is 65504 (FP16 max finite value).
+  - B is filled by repeating integers in [b_min, b_max].
+  - Default B integer cycle is [0, 1, ..., 10].
 
 Hex output rule:
   - Pack 2 BF16 values into one 32-bit word per line.
@@ -66,34 +64,22 @@ def write_bf16_hex_file(bits: np.ndarray, out_path: Path, endianness: str, with_
 
 
 def build_b_cycle(
-    wrap_value: int,
-    deduplicate_bf16: bool,
+    b_min: int,
+    b_max: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Build one B cycle from integer source 0..wrap_value.
+    Build one B cycle from integer source b_min..b_max.
 
     Returns:
       - cycle_bits: BF16 uint16 bit-patterns
       - cycle_f32:  float32 values decoded from cycle_bits
     """
-    src = np.arange(wrap_value + 1, dtype=np.float32)
+    src = np.arange(b_min, b_max + 1, dtype=np.float32)
     cycle_bits = float32_to_bf16_bits(src)
     cycle_f32 = bf16_bits_to_float32(cycle_bits)
 
-    # Keep values inside the requested numeric bound after BF16 rounding.
-    within_bound = cycle_f32 <= np.float32(wrap_value)
-    cycle_bits = cycle_bits[within_bound]
-    cycle_f32 = cycle_f32[within_bound]
-
-    if deduplicate_bf16 and cycle_bits.size > 1:
-        keep = np.empty(cycle_bits.shape[0], dtype=bool)
-        keep[0] = True
-        keep[1:] = cycle_bits[1:] != cycle_bits[:-1]
-        cycle_bits = cycle_bits[keep]
-        cycle_f32 = cycle_f32[keep]
-
     if cycle_bits.size == 0:
-        raise ValueError("B cycle is empty; check wrap_value")
+        raise ValueError("B cycle is empty; check b_min/b_max")
     return cycle_bits.astype(np.uint16), cycle_f32.astype(np.float32)
 
 
@@ -145,12 +131,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--m", type=int, default=1, help="A rows")
     parser.add_argument("--k", type=int, default=4096, help="A cols / B rows")
     parser.add_argument("--n", type=int, default=4096, help="B cols / C cols")
-    parser.add_argument(
-        "--wrap-value",
-        type=int,
-        default=65504,
-        help="B wraps after this value (default: FP16 max finite 65504)",
-    )
+    parser.add_argument("--b-min", type=int, default=0, help="B cycle integer minimum")
+    parser.add_argument("--b-max", type=int, default=10, help="B cycle integer maximum")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -166,20 +148,6 @@ def parse_args() -> argparse.Namespace:
         default="little",
         help="Packing order for two BF16 words into one uint32 (default: [v0,v1] -> v1v0 hex)",
     )
-    dedup_group = parser.add_mutually_exclusive_group()
-    dedup_group.add_argument(
-        "--b-dedup",
-        dest="b_dedup",
-        action="store_true",
-        help="Remove adjacent duplicate BF16 values in B cycle (default)",
-    )
-    dedup_group.add_argument(
-        "--b-keep-duplicates",
-        dest="b_dedup",
-        action="store_false",
-        help="Keep raw BF16 rounding duplicates in B cycle",
-    )
-    parser.set_defaults(b_dedup=True)
     parser.add_argument(
         "--with-0x",
         action="store_true",
@@ -199,8 +167,8 @@ def main() -> None:
 
     if args.m <= 0 or args.k <= 0 or args.n <= 0:
         raise ValueError("m, k, n must be positive integers")
-    if args.wrap_value < 0:
-        raise ValueError("wrap_value must be non-negative")
+    if args.b_min > args.b_max:
+        raise ValueError("b_min must be <= b_max")
 
     out_dir = args.output_dir
     a_path = out_dir / args.a_file
@@ -208,7 +176,7 @@ def main() -> None:
     c_path = out_dir / args.c_file
 
     print(f"[info] generating A({args.m}, {args.k}), B({args.k}, {args.n})")
-    print(f"[info] B wrap_value={args.wrap_value}, endianness={args.endianness}")
+    print(f"[info] B integer cycle=[{args.b_min}..{args.b_max}], endianness={args.endianness}")
     print(f"[info] output dir: {out_dir.resolve()}")
 
     # A is constant BF16 1.0 for all elements.
@@ -218,13 +186,10 @@ def main() -> None:
     print(f"[info] wrote A hex -> {a_path}")
 
     b_cycle_bits, b_cycle_f32 = build_b_cycle(
-        wrap_value=args.wrap_value,
-        deduplicate_bf16=args.b_dedup,
+        b_min=args.b_min,
+        b_max=args.b_max,
     )
-    print(
-        f"[info] B cycle length={b_cycle_bits.size} "
-        f"(dedup={'on' if args.b_dedup else 'off'})"
-    )
+    print(f"[info] B cycle length={b_cycle_bits.size}")
 
     # Stream B generation and C accumulation in float32.
     c_acc = generate_b_and_compute_c(
