@@ -9,7 +9,8 @@ Default shape is:
   A: (1, 4096), B: (4096, 4096), C: (1, 4096)
 
 Data generation rule:
-  - A and B start from 0 and increment by 1.
+  - A is filled with BF16 value 1.0.
+  - B starts from 0 and increments by 1.
   - When value exceeds wrap_value, it wraps to 0.
   - Default wrap_value is 65535 (16-bit width wrap).
 
@@ -172,9 +173,8 @@ def main() -> None:
     print(f"[info] wrap_value={args.wrap_value}, endianness={args.endianness}")
     print(f"[info] output dir: {out_dir.resolve()}")
 
-    # A sequence: 0..wrap_value looping, then quantize to BF16.
-    a_seq = make_wrapped_sequence(args.m * args.k, args.wrap_value).reshape(args.m, args.k)
-    a_bits = float32_to_bf16_bits(a_seq.reshape(-1)).reshape(args.m, args.k)
+    # A is constant BF16 1.0 for all elements.
+    a_bits = np.full((args.m, args.k), np.uint16(0x3F80), dtype=np.uint16)
     a_bf16_f32 = bf16_bits_to_float32(a_bits)
     write_bf16_hex_file(a_bits.reshape(-1), a_path, args.endianness, args.with_0x)
     print(f"[info] wrote A hex -> {a_path}")
