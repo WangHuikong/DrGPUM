@@ -19,6 +19,7 @@ Hex output rule:
   - Pack 2 BF16 values into one 32-bit word per line.
   - Default packing is "little" (example: [0.0, 1.0] -> 3F800000).
   - Output one 8-hex-digit word per line (uppercase).
+  - C is computed from the same per-line hex visual order (left 16-bit first).
 """
 
 from __future__ import annotations
@@ -63,6 +64,25 @@ def write_bf16_hex_file(bits: np.ndarray, out_path: Path, endianness: str, with_
     packed = pack_two_bf16_to_u32(bits, endianness)
     fmt = "0x%08X" if with_0x else "%08X"
     np.savetxt(out_path, packed, fmt=fmt)
+
+
+def values_in_hex_visual_order(values: np.ndarray, endianness: str) -> np.ndarray:
+    """
+    Reorder 1D values to match per-line hex visual order (high 16-bit first).
+
+    For little-endian packing, each pair is swapped:
+      [v0, v1] packed as 0x(v1)(v0), visual order is [v1, v0].
+    """
+    values = np.asarray(values)
+    if endianness == "big" or values.size < 2:
+        return values
+    if values.size % 2 != 0:
+        raise ValueError("n must be even when endianness is little")
+
+    out = values.copy()
+    out[0::2] = values[1::2]
+    out[1::2] = values[0::2]
+    return out
 
 
 def build_b_cycle_range(b_min: int, b_max: int) -> tuple[np.ndarray, np.ndarray]:
@@ -123,7 +143,9 @@ def generate_b_and_compute_c(
             packed = pack_two_bf16_to_u32(row_bits, endianness)
             np.savetxt(fp, packed, fmt=fmt)
 
-            c_acc += a_bf16_f32[:, row : row + 1] * row_bf16_f32[None, :]
+            # Keep C aligned with how B is visually read from hex lines.
+            row_bf16_f32_for_c = values_in_hex_visual_order(row_bf16_f32, endianness)
+            c_acc += a_bf16_f32[:, row : row + 1] * row_bf16_f32_for_c[None, :]
 
             if progress_every > 0 and ((row + 1) % progress_every == 0 or row + 1 == k):
                 print(f"[progress] processed B row {row + 1}/{k}")
@@ -180,6 +202,8 @@ def main() -> None:
 
     if args.m <= 0 or args.k <= 0 or args.n <= 0:
         raise ValueError("m, k, n must be positive integers")
+    if args.endianness == "little" and args.n % 2 != 0:
+        raise ValueError("n must be even when endianness is little")
     if args.b_mode == "range" and args.b_min > args.b_max:
         raise ValueError("b_min must be <= b_max")
 
@@ -218,9 +242,10 @@ def main() -> None:
     )
     print(f"[info] wrote B hex -> {b_path}")
 
-    # C is BF16 output.
+    # C is BF16 output. Pre-reorder so written hex keeps visual order consistent.
     c_bits = float32_to_bf16_bits(c_acc.reshape(-1))
-    write_bf16_hex_file(c_bits, c_path, args.endianness, args.with_0x)
+    c_bits_for_output = values_in_hex_visual_order(c_bits, args.endianness)
+    write_bf16_hex_file(c_bits_for_output, c_path, args.endianness, args.with_0x)
     print(f"[info] wrote C hex -> {c_path}")
     print("[done] all files generated.")
 
